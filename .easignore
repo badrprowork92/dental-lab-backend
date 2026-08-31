@@ -1,0 +1,8 @@
+.project-config.json
+.env
+.env.*
+node_modules/
+.git/
+.expo/
+dist/
+web-build/

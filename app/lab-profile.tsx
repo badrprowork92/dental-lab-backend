@@ -1,0 +1,33 @@
+import { useEffect, useState } from "react";
+import { Alert, Image, Pressable, StyleSheet, View } from "react-native";
+import * as ImagePicker from "expo-image-picker";
+import { router, useLocalSearchParams } from "expo-router";
+
+import { AppText, FormInput, IconButton, LabScreen, PrimaryButton, ScreenTitle, colors } from "@/components/lab-ui";
+import { getApiBaseUrl } from "@/constants/oauth";
+import { useLabSession } from "@/providers/lab-session-provider";
+import { trpc } from "@/lib/trpc";
+
+type SupportedLogoMime = "image/jpeg" | "image/png" | "image/webp";
+function resolvableLogo(uri?: string | null) { if (!uri) return null; if (/^https?:\/\//.test(uri) || uri.startsWith("file:")) return uri; const base = getApiBaseUrl(); return base ? `${base}${uri}` : uri; }
+
+export default function LabProfileScreen() {
+  const { session } = useLabSession();
+  const params = useLocalSearchParams<{ labId?: string }>();
+  const adminLabId = Number(params.labId);
+  const isPlatformAdmin = session?.role === "admin";
+  const canEdit = isPlatformAdmin && Number.isInteger(adminLabId) && adminLabId > 0;
+  const labProfile = trpc.lab.profile.get.useQuery(undefined, { enabled: session?.role === "lab_user" });
+  const adminProfile = trpc.admin.profile.useQuery({ labId: adminLabId || 0 }, { enabled: canEdit });
+  const profile = canEdit ? adminProfile.data : labProfile.data;
+  const utils = trpc.useUtils();
+  const [labName, setLabName] = useState(""); const [phoneNumber, setPhoneNumber] = useState(""); const [location, setLocation] = useState(""); const [headerNote1, setHeaderNote1] = useState(""); const [headerNote2, setHeaderNote2] = useState(""); const [headerNote3, setHeaderNote3] = useState(""); const [logoUri, setLogoUri] = useState<string | null>(null); const [logoBase64, setLogoBase64] = useState<string | undefined>(); const [logoMime, setLogoMime] = useState<SupportedLogoMime>("image/jpeg");
+  useEffect(() => { if (!profile) return; setLabName(profile.labName); setPhoneNumber(profile.phoneNumber); setLocation(profile.location); setHeaderNote1(profile.headerNote1); setHeaderNote2(profile.headerNote2); setHeaderNote3(profile.headerNote3); setLogoUri(resolvableLogo(profile.logoUrl)); }, [profile]);
+  const update = trpc.admin.updateProfile.useMutation({ onSuccess: async (saved) => { setLogoUri(resolvableLogo(saved.logoUrl)); setLogoBase64(undefined); await utils.admin.profile.invalidate(); await utils.admin.labs.invalidate(); Alert.alert("تم الحفظ", "تم تحديث بيانات المختبر وستظهر في ترويسة التقارير."); }, onError: (error) => Alert.alert("تعذر الحفظ", error.message) });
+  const pickLogo = async () => { if (!canEdit) return; const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1, 1], quality: 0.65, base64: true }); if (result.canceled) return; const asset = result.assets[0]; if (!asset.base64) return Alert.alert("تعذر قراءة الشعار", "يرجى اختيار صورة أخرى أصغر حجمًا."); const mime = asset.mimeType === "image/png" || asset.mimeType === "image/webp" ? asset.mimeType : "image/jpeg"; setLogoUri(asset.uri); setLogoBase64(asset.base64); setLogoMime(mime); };
+  const save = () => { if (!canEdit) return; if (!labName.trim()) return Alert.alert("اسم المختبر مطلوب", "أدخل اسم المختبر ليظهر في الترويسة."); update.mutate({ labId: adminLabId, profile: { labName, phoneNumber, location, headerNote1, headerNote2, headerNote3, ...(logoBase64 ? { logoBase64, logoMime } : {}) } }); };
+  const readOnly = !canEdit;
+  return <LabScreen><View style={styles.header}><IconButton icon="close" onPress={() => router.back()} /><ScreenTitle title="بيانات المختبر" subtitle={canEdit ? "إدارة بيانات المختبر والشعار لترويسة التقارير" : "بيانات للعرض فقط — يتم تعديلها من حساب المسؤول"} /></View><View style={styles.form}><Pressable disabled={readOnly} onPress={pickLogo} style={({ pressed }) => [styles.logoBox, pressed && !readOnly && styles.pressed]}>{logoUri ? <Image source={{ uri: logoUri }} style={styles.logo} resizeMode="contain" /> : <AppText style={styles.logoHint}>{readOnly ? "لا يوجد شعار محفوظ" : "اضغط لاختيار شعار المختبر"}</AppText>}{!readOnly ? <AppText style={styles.changeLogo}>{logoUri ? "تغيير الشعار" : "اختيار شعار"}</AppText> : null}</Pressable>{readOnly ? <View style={styles.lockNotice}><AppText style={styles.lockNoticeText}>تُقفل بيانات المختبر والشعار لحماية هوية الاشتراك. تواصل مع المسؤول عند الحاجة إلى تعديلها.</AppText></View> : null}<FormInput label="اسم المختبر" value={labName} onChangeText={setLabName} placeholder="مثال: معمل الثقة لصناعة الأسنان" editable={!readOnly} /><FormInput label="رقم الهاتف" value={phoneNumber} onChangeText={setPhoneNumber} keyboardType="phone-pad" placeholder="مثال: 777000000" editable={!readOnly} /><FormInput label="الموقع أو العنوان" value={location} onChangeText={setLocation} placeholder="مثال: صنعاء — شارع ..." multiline editable={!readOnly} /><AppText style={styles.notesTitle}>ملاحظات الترويسة — تظهر في العمود الأيسر للتقرير</AppText><FormInput label="ملاحظة 1" value={headerNote1} onChangeText={setHeaderNote1} placeholder="مثال: فني أسنان / رياض شوقي" editable={!readOnly} /><FormInput label="ملاحظة 2" value={headerNote2} onChangeText={setHeaderNote2} placeholder="مثال: خدمة تصوير أو معلومات إضافية" editable={!readOnly} /><FormInput label="ملاحظة 3" value={headerNote3} onChangeText={setHeaderNote3} placeholder="مثال: عنوان فرعي أو تنبيه" editable={!readOnly} />{canEdit ? <PrimaryButton label="إدارة العملات وأسعار الصرف" onPress={() => router.push({ pathname: "/currency-settings", params: { labId: String(adminLabId) } })} icon="currency-exchange" variant="secondary" /> : null}</View>{canEdit ? <PrimaryButton label={update.isPending ? "جارٍ الحفظ..." : "حفظ بيانات المختبر"} onPress={save} icon="save" disabled={update.isPending} /> : null}</LabScreen>;
+}
+
+const styles = StyleSheet.create({ header: { flexDirection: "row-reverse", alignItems: "flex-start", gap: 12 }, form: { gap: 14 }, logoBox: { minHeight: 188, borderWidth: 1, borderStyle: "dashed", borderColor: colors.border, borderRadius: 20, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", overflow: "hidden", padding: 16 }, logo: { width: "100%", height: 140 }, logoHint: { color: colors.muted, fontFamily: "Cairo-SemiBold" }, changeLogo: { color: colors.primary, fontFamily: "Cairo-Bold", fontSize: 12, marginTop: 8 }, notesTitle: { color: colors.primary, fontFamily: "Cairo-Bold", fontSize: 12, textAlign: "right", marginTop: 6 }, lockNotice: { backgroundColor: colors.goldSoft, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "#F2D9A5" }, lockNoticeText: { color: colors.warning, fontSize: 11, lineHeight: 18 }, pressed: { opacity: 0.72 } });
